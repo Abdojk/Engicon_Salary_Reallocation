@@ -12,8 +12,8 @@ Targets AxDB on SQL Server.
 |---------------------------|-----------------|----------------|--------------------------------------------------------------------------------------|
 | `@DataAreaId`             | `NVARCHAR(4)`   | `N'ENGJ'`      | AX legal entity (filters AX-side tables: timesheets, projects, resources).           |
 | `@CompanyCode`            | `NVARCHAR(20)`  | `N'C01'`       | Payroll company code (`INS_PAYROLLEMPLTRANS.COMPANYCODE`). **Not** the same as `@DataAreaId` on this deployment. |
-| `@FromDate`               | `DATE`          | `'2026-01-01'` | Window start (inclusive). Payroll uses `YEAR`/`MONTH` of `@FromDate`.                |
-| `@ToDate`                 | `DATE`          | `'2026-01-31'` | Window end (inclusive).                                                              |
+| `@FromDate`               | `DATE`          | `'2026-02-01'` | Window start (inclusive). Payroll uses `YEAR`/`MONTH` of `@FromDate`.                |
+| `@ToDate`                 | `DATE`          | `'2026-02-28'` | Window end (inclusive).                                                              |
 | `@ApprovalStatus`         | `INT`           | `6`            | `TSAppStatus`; `6` = Posted on this deployment's custom extension (standard enum stops at 5). |
 | `@WorkerPersonnelNumber`  | `NVARCHAR(25)`  | `NULL`         | Optional filter; `NULL` = all workers.                                               |
 | `@ProjId`                 | `NVARCHAR(20)`  | `NULL`         | Optional filter; `NULL` = all projects.                                              |
