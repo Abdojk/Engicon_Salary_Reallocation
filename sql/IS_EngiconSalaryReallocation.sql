@@ -18,9 +18,10 @@ SET XACT_ABORT ON;
 -- Parameters (edit per run)
 -- ---------------------------------------------------------------------
 DECLARE @DataAreaId             NVARCHAR(4)   = N'ENGJ';
-DECLARE @FromDate               DATE          = '2025-01-01';
-DECLARE @ToDate                 DATE          = '2025-01-31';
-DECLARE @ApprovalStatus         INT           = 4;            -- TSAppStatus::Approved
+DECLARE @CompanyCode            NVARCHAR(20)  = N'C01';       -- INS_PAYROLLEMPLTRANS.COMPANYCODE; not the same as @DataAreaId
+DECLARE @FromDate               DATE          = '2026-01-01';
+DECLARE @ToDate                 DATE          = '2026-01-31';
+DECLARE @ApprovalStatus         INT           = 6;            -- 6 = Posted on this AxDB's custom TSAppStatus extension
 DECLARE @WorkerPersonnelNumber  NVARCHAR(25)  = NULL;         -- optional
 DECLARE @ProjId                 NVARCHAR(20)  = NULL;         -- optional
 
@@ -189,7 +190,7 @@ FROM INS_PAYROLLEMPLTRANS AS p WITH (NOLOCK)
 WHERE p.[YEAR]      = YEAR(@FromDate)
   AND p.[MONTH]     = MONTH(@FromDate)
   AND p.PROJECTCOST <> 0
-  AND p.COMPANYCODE = @DataAreaId
+  AND p.COMPANYCODE = @CompanyCode
 GROUP BY p.PERSONNELNUMBER, p.TRANSCODE;
 
 -- ---------------------------------------------------------------------

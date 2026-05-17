@@ -8,14 +8,15 @@ Targets AxDB on SQL Server.
 
 ### Parameters
 
-| Name                      | Type            | Default      | Notes                                                  |
-|---------------------------|-----------------|--------------|--------------------------------------------------------|
-| `@DataAreaId`             | `NVARCHAR(4)`   | `N'ENGJ'`    | Legal entity / company.                                |
-| `@FromDate`               | `DATE`          | `'2025-01-01'` | Window start (inclusive).                            |
-| `@ToDate`                 | `DATE`          | `'2025-01-31'` | Window end (inclusive). Payroll uses YEAR/MONTH of `@FromDate`. |
-| `@ApprovalStatus`         | `INT`           | `4`          | `TSAppStatus`; `4` = Approved on stock D365FO.        |
-| `@WorkerPersonnelNumber`  | `NVARCHAR(25)`  | `NULL`       | Optional filter; `NULL` = all workers.                |
-| `@ProjId`                 | `NVARCHAR(20)`  | `NULL`       | Optional filter; `NULL` = all projects.               |
+| Name                      | Type            | Default        | Notes                                                                                |
+|---------------------------|-----------------|----------------|--------------------------------------------------------------------------------------|
+| `@DataAreaId`             | `NVARCHAR(4)`   | `N'ENGJ'`      | AX legal entity (filters AX-side tables: timesheets, projects, resources).           |
+| `@CompanyCode`            | `NVARCHAR(20)`  | `N'C01'`       | Payroll company code (`INS_PAYROLLEMPLTRANS.COMPANYCODE`). **Not** the same as `@DataAreaId` on this deployment. |
+| `@FromDate`               | `DATE`          | `'2026-01-01'` | Window start (inclusive). Payroll uses `YEAR`/`MONTH` of `@FromDate`.                |
+| `@ToDate`                 | `DATE`          | `'2026-01-31'` | Window end (inclusive).                                                              |
+| `@ApprovalStatus`         | `INT`           | `6`            | `TSAppStatus`; `6` = Posted on this deployment's custom extension (standard enum stops at 5). |
+| `@WorkerPersonnelNumber`  | `NVARCHAR(25)`  | `NULL`         | Optional filter; `NULL` = all workers.                                               |
+| `@ProjId`                 | `NVARCHAR(20)`  | `NULL`         | Optional filter; `NULL` = all projects.                                              |
 
 ### Result sets
 
@@ -36,6 +37,8 @@ Targets AxDB on SQL Server.
 | 3 | `TSTIMESHEETLINEWEEK` flattens `Hours[i]` to `HOURS, HOURS2_, HOURS3_, HOURS4_, HOURS5_, HOURS6_, HOURS7_` — day 1 has no suffix, days 2-7 use `_` | Applied  |
 | 4 | `PROJHOURCOSTPRICE.TRANSDATE` is the effective-from column for the cost-price lookup (not `FROMDATE`)                             | Applied  |
 | 5 | `TSTIMESHEETTABLE.RESOURCE_` and `PROJHOURCOSTPRICE.RESOURCE_` use the trailing-underscore rename for the reserved word `RESOURCE` | Applied  |
+| 6 | `INS_PAYROLLEMPLTRANS.COMPANYCODE` is a payroll-specific code (e.g. `C01`), not equal to `@DataAreaId` (`ENGJ`); use the separate `@CompanyCode` parameter | Applied  |
+| 7 | `TSTIMESHEETTABLE.APPROVALSTATUS = 6` represents the 'Posted' state on this deployment's custom `TSAppStatus` enum (standard enum stops at 5)            | Applied  |
 
 `STEP 0: schema validation` queries `INFORMATION_SCHEMA.COLUMNS` for every
 identifier the script references and aborts with `THROW 50100` if any are
@@ -67,7 +70,12 @@ the `DECLARE` block.
 
 Schema-first validation queries are embedded; the user runs them on
 each execution. Caveat list above reconciled against the live AxDB
-catalog on **2026-05-17** — STEP 0 surfaced 13 mismatches versus the
-initial pre-validated set; all 13 corrections have been applied and
-the resource-view physical name (`RESOURCEVIEW`) was confirmed via a
-discovery query against `INFORMATION_SCHEMA.TABLES`.
+catalog on **2026-05-17**:
+- STEP 0 surfaced 13 identifier mismatches; all corrected.
+- `RESOURCEVIEW` (view) confirmed as the physical backing for X++
+  `ResourceView` via `INFORMATION_SCHEMA.TABLES` discovery.
+- Data-shape diagnostic (5 probe queries) surfaced two further
+  facts: `APPROVALSTATUS = 6` is Posted (custom enum extension), and
+  `INS_PAYROLLEMPLTRANS.COMPANYCODE` uses payroll codes like `C01`
+  rather than `ENGJ`. Both are now parameterised at the top of the
+  script with sensible defaults.
