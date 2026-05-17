@@ -79,3 +79,50 @@ catalog on **2026-05-17**:
   `INS_PAYROLLEMPLTRANS.COMPANYCODE` uses payroll codes like `C01`
   rather than `ENGJ`. Both are now parameterised at the top of the
   script with sensible defaults.
+
+---
+
+## `IS_EngiconSalaryReallocation_simulated.sql`
+
+Diagnostic variant of the canonical script. Identical pipeline,
+except `#HourRate` adds a forward-looking fallback for workers
+whose latest `PROJHOURCOSTPRICE.TRANSDATE <= @ToDate` row is
+missing or zero.
+
+### Simulation rule
+
+- **Backward (canonical):** latest `TRANSDATE <= @ToDate`.
+- **Forward (simulation):** earliest `TRANSDATE > @ToDate`.
+- **Effective rate** = `COALESCE(NULLIF(Backward, 0), Forward, 0)`.
+  Forward only fires when Backward is `NULL` or `0` — most rows
+  are unchanged.
+- Forward distance is **unbounded** — if Jan/Mar are also missing,
+  the script reaches into Apr/May/etc.
+
+### Extra columns in the main result set
+
+| Column                       | Meaning                                                                |
+|------------------------------|------------------------------------------------------------------------|
+| `HourRateSource`             | `Original` (used Backward), `Simulated (Forward +N months)`, or `NoneFound` |
+| `StandardAmount_Original`    | What the canonical script returns (Backward only)                      |
+| `StandardAmount_Simulated`   | Re-computed with the Effective rate                                    |
+| `StandardAmount_Delta`       | `Simulated − Original`                                                 |
+
+### Summary result set
+
+A second result set groups rows by `Source` and totals
+`SumOriginal`, `SumSimulated`, `SumDelta`, `SumAbsDelta`,
+`DistinctWorkers`, `Rows`. Use `SumAbsDelta` on the `Simulated`
+row as the worst-case budget that missing rates can explain in the
+canonical-vs-SSRS delta.
+
+### How to interpret
+
+- If `Simulated.SumDelta` ≈ the SSRS-vs-SQL discrepancy → missing
+  rates explain the gap; either backfill `PROJHOURCOSTPRICE` or
+  accept the simulation.
+- If `Simulated.SumDelta` << the discrepancy → the cause is
+  elsewhere (likely a formula or a CompanyCode/window difference).
+- `NoneFound` rows have zero `StandardAmount` in both columns;
+  their `Rows` count is the population the SSRS report may also
+  drop or zero out.
