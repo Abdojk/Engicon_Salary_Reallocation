@@ -1,0 +1,288 @@
+[SRSReportParameterAttribute(classStr(IS_EngiconSalaryReallocationContract))]
+class IS_EngiconSalaryReallocationDP extends SrsReportDataProviderBase
+{
+    IS_EngiconSalaryReallocationTmp tmpTable;
+    IS_EngiconSalaryReallocationContract contract;
+    List warningList = new List(Types::String);
+    public void processReport()
+    {
+        contract = this.parmDataContract();
+        this.generateReportData();
+        str msg;
+        ListEnumerator le = warningList.getEnumerator();
+ 
+        while (le.moveNext())
+        {
+            msg += le.current() + "\n";
+        }
+ 
+        if (msg)
+        {
+            checkFailed(msg);
+        }
+    }
+ 
+    private void generateReportData()
+    {
+        delete_from tmpTable;
+ 
+        TransDate fromDate = contract.parmFromDate();
+        TransDate toDate   = contract.parmToDate();
+ 
+        TSAppStatus appStatus=contract.parmStatus();
+
+ 
+        boolean isWorkerSelected  = contract.parmWorker() != 0;
+        boolean isProjectSelected = contract.parmProjId() != '';
+ 
+        if (!fromDate || !toDate)
+            throw error("Please select From date and To date.");
+ 
+        if (fromDate > toDate)
+            throw error("From date cannot be greater than To date.");
+ 
+        if ((toDate - fromDate) > 366)
+            throw error("Date range cannot exceed one year.");
+ 
+        //if (!isWorkerSelected && !isProjectSelected)
+        //    throw error("You must select either Worker or Project.");
+ 
+        //if (!isWorkerSelected)
+        //warningList.addEnd("Running report for all workers may take longer time.");
+ 
+        HcmWorker worker;
+        if (isWorkerSelected)
+        {
+            worker = HcmWorker::find(contract.parmWorker());
+            if (!worker.RecId)
+                throw error("Selected worker not found.");
+        }
+ 
+        Map transNameMap = new Map(Types::String, Types::String);
+        INS_PayrollTransInfoTable transInfo;
+ 
+        while select transInfo
+        {
+            transNameMap.insert(transInfo.TransCode, transInfo.TransDesc);
+        }
+ 
+        Map workerProjectHours = new Map(Types::String, Types::Class);
+        Map projectTotalHours  = new Map(Types::String, Types::Real);
+ 
+        TSTimesheetTable     tsTable;
+        TSTimesheetLine      tsLine;
+        TSTimesheetLineWeek  tsWeek;
+        ResourceView         rv;
+        ProjTable projTable;
+ 
+        while select tsTable
+            where tsTable.ApprovalStatus==appStatus
+        join rv
+            where tsTable.Resource == rv.RecId
+&& (!isWorkerSelected || rv.ResourceId == worker.PersonnelNumber)
+        join tsLine
+            where tsLine.TimesheetNbr == tsTable.TimesheetNbr
+        join tsWeek
+            where tsWeek.TSTimesheetLine == tsLine.RecId
+&& tsWeek.DayFrom <= toDate
+&& (tsWeek.DayFrom + 6) >= fromDate
+        {
+            str workerId = rv.ResourceId;
+            ProjId projId = tsLine.ProjId;
+ 
+            real projHours = 0;
+            int i;
+            TransDate currentDay;
+ 
+            for (i = 1; i <= 7; i++)
+            {
+                currentDay = tsWeek.DayFrom + (i - 1);
+ 
+                if (currentDay >= fromDate && currentDay <= toDate)
+                {
+                    projHours += tsWeek.Hours[i];
+                }
+            }
+ 
+            projectTotalHours.insert(
+                projId,
+                projectTotalHours.exists(projId)
+                    ? projectTotalHours.lookup(projId) + projHours
+                    : projHours
+            );
+ 
+            Map projectMap;
+ 
+            if (!workerProjectHours.exists(workerId))
+            {
+                projectMap = new Map(Types::String, Types::Real);
+                workerProjectHours.insert(workerId, projectMap);
+            }
+            else
+            {
+                projectMap = workerProjectHours.lookup(workerId);
+            }
+ 
+            projectMap.insert(
+                projId,
+                projectMap.exists(projId)
+                    ? projectMap.lookup(projId) + projHours
+                    : projHours
+            );
+        }
+ 
+        if (workerProjectHours.elements() == 0)
+        {
+            info(strFmt(
+                "No approved timesheets were found for worker %1 (%2) within the selected date range.",
+                worker.PersonnelNumber,
+                worker.name()
+            ));
+        }
+ 
+        MapIterator workerIter = new MapIterator(workerProjectHours);
+ 
+        while (workerIter.more())
+        {
+            str workerId = workerIter.key();
+            Map projectMap = workerIter.value();
+ 
+            HcmWorker loopWorker = HcmWorker::findByPersonnelNumber(workerId);
+ 
+            select firstOnly rv where rv.ResourceId == workerId
+&& rv.ResourceCompanyId == curExt();
+            if (!rv.RecId)
+            {
+                info(strFmt("Resource for worker %1 was not found in company %2.", workerId, curext()));
+            }
+            CostPrice hourRate = ResourceFacade::getCostPrice(rv.RecId, toDate, 0);
+            hourRate = round(hourRate, 0.001);
+ 
+ 
+            
+ 
+            if (hourRate == 0)
+            {
+                info(strFmt("Cost price is zero for worker %1.", workerId));
+                warningList.addEnd(strFmt("Cost price is zero for worker %1.", workerId));
+            }
+ 
+            real workerTotalHours = 0;
+            MapIterator projectIter = new MapIterator(projectMap);
+ 
+            while (projectIter.more())
+            {
+                workerTotalHours += projectIter.value();
+                projectIter.next();
+            }
+            if (workerTotalHours == 0)
+            {
+                workerIter.next();
+                continue;
+            }
+ 
+            Map categoryAmountMap = new Map(Types::String, Types::Real);
+            AmountCur totalCategoryAmount = 0;
+ 
+            INS_PayrollEmplTrans payrollTrans;
+            while select payrollTrans
+                where payrollTrans.PersonnelNumber == workerId
+&& payrollTrans.Year  == year(fromDate)
+&& payrollTrans.Month == mthOfYr(fromDate)
+&& payrollTrans.ProjectCost != 0
+            {
+ 
+                //Modified from transamoubt to CostAmount
+                if (!categoryAmountMap.exists(payrollTrans.TransCode))
+                    categoryAmountMap.insert(payrollTrans.TransCode, payrollTrans.CostAmount);
+                else
+                    categoryAmountMap.insert(
+                        payrollTrans.TransCode,
+                        categoryAmountMap.lookup(payrollTrans.TransCode) + payrollTrans.CostAmount
+                    );
+ 
+                totalCategoryAmount += payrollTrans.CostAmount;
+            }
+ 
+            if (totalCategoryAmount == 0)
+            {
+                info(strFmt("No payroll transactions found for worker %1.", workerId));
+                warningList.addEnd(strFmt("No payroll transactions found for worker %1.", workerId));
+                //workerIter.next();
+                //continue;
+            }
+ 
+            MapIterator categoryIter = new MapIterator(categoryAmountMap);
+ 
+            while (categoryIter.more())
+            {
+                str transCode = categoryIter.key();
+                real CostAmount = categoryIter.value();
+ 
+                projectIter = new MapIterator(projectMap);
+ 
+                while (projectIter.more())
+                {
+                    //if(totalCategoryAmount == 0 || workerTotalHours == 0)
+                    //{
+                    //    projectIter.next();  // ✅ move forward
+                    //    continue;
+                    //}
+                    ProjId projId = projectIter.key();
+                    real projHours = projectIter.value();
+ 
+                    if (isProjectSelected && projId != contract.parmProjId())
+                    {
+                        projectIter.next();
+                        continue;
+                    }
+                    select firstOnly projTable
+                    where projTable.ProjId == projId;
+                    real actualAmount;
+                    if( workerTotalHours != 0)
+                    {
+                        actualAmount = (CostAmount / workerTotalHours) * projHours;
+                    }
+                    real standardAmount;
+                    if(totalCategoryAmount != 0)// && workerTotalHours == 0)
+                    {
+                        standardAmount =projHours * hourRate * (CostAmount / totalCategoryAmount);
+                    }
+                    tmpTable.clear();
+                    tmpTable.PersonnelNumber = workerId;
+                    tmpTable.WorkerName      = loopWorker.name();
+                    tmpTable.ProjId          = projId;
+                    tmpTable.ProjectHours    = projHours;
+                    tmpTable.TotalHours      = projectTotalHours.lookup(projId);
+                    tmpTable.ProjName     = projTable.Name;
+                    tmpTable.ProjGroupId  = projTable.ProjGroupId;
+ 
+                    tmpTable.TransCode = transCode;
+                    tmpTable.TransCodeName = transNameMap.exists(transCode)
+                        ? transNameMap.lookup(transCode)
+                        : transCode;
+ 
+                    tmpTable.TransAmount    = CostAmount;
+                    tmpTable.ActualAmount   = abs(actualAmount);
+                    tmpTable.StandardAmount = abs(standardAmount);
+ 
+                    tmpTable.insert();
+ 
+                    projectIter.next();
+                }
+ 
+                categoryIter.next();
+            }
+ 
+            workerIter.next();
+        }
+    }
+ 
+    [SRSReportDataSetAttribute(tableStr(IS_EngiconSalaryReallocationTmp))]
+    public IS_EngiconSalaryReallocationTmp getTmp()
+    {
+        select * from tmpTable;
+        return tmpTable;
+    }
+ 
+}
