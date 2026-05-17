@@ -48,7 +48,7 @@ CREATE TABLE #Required (TableName SYSNAME NOT NULL, ColumnName SYSNAME NOT NULL)
 INSERT INTO #Required (TableName, ColumnName) VALUES
  ('TSTIMESHEETTABLE',         'TIMESHEETNBR'),
  ('TSTIMESHEETTABLE',         'APPROVALSTATUS'),
- ('TSTIMESHEETTABLE',         'RESOURCE'),
+ ('TSTIMESHEETTABLE',         'RESOURCE_'),
  ('TSTIMESHEETTABLE',         'DATAAREAID'),
  ('TSTIMESHEETLINE',          'TIMESHEETNBR'),
  ('TSTIMESHEETLINE',          'RECID'),
@@ -56,16 +56,16 @@ INSERT INTO #Required (TableName, ColumnName) VALUES
  ('TSTIMESHEETLINE',          'DATAAREAID'),
  ('TSTIMESHEETLINEWEEK',      'TSTIMESHEETLINE'),
  ('TSTIMESHEETLINEWEEK',      'DAYFROM'),
- ('TSTIMESHEETLINEWEEK',      'HOURS1'),
- ('TSTIMESHEETLINEWEEK',      'HOURS2'),
- ('TSTIMESHEETLINEWEEK',      'HOURS3'),
- ('TSTIMESHEETLINEWEEK',      'HOURS4'),
- ('TSTIMESHEETLINEWEEK',      'HOURS5'),
- ('TSTIMESHEETLINEWEEK',      'HOURS6'),
- ('TSTIMESHEETLINEWEEK',      'HOURS7'),
- ('RESOURCE_',                'RECID'),
- ('RESOURCE_',                'RESOURCEID'),
- ('RESOURCE_',                'RESOURCECOMPANYID'),
+ ('TSTIMESHEETLINEWEEK',      'HOURS'),
+ ('TSTIMESHEETLINEWEEK',      'HOURS2_'),
+ ('TSTIMESHEETLINEWEEK',      'HOURS3_'),
+ ('TSTIMESHEETLINEWEEK',      'HOURS4_'),
+ ('TSTIMESHEETLINEWEEK',      'HOURS5_'),
+ ('TSTIMESHEETLINEWEEK',      'HOURS6_'),
+ ('TSTIMESHEETLINEWEEK',      'HOURS7_'),
+ ('RESOURCEVIEW',             'RECID'),
+ ('RESOURCEVIEW',             'RESOURCEID'),
+ ('RESOURCEVIEW',             'RESOURCECOMPANYID'),
  ('HCMWORKER',                'PERSONNELNUMBER'),
  ('HCMWORKER',                'RECID'),
  ('HCMWORKER',                'PERSON'),
@@ -85,8 +85,8 @@ INSERT INTO #Required (TableName, ColumnName) VALUES
  ('INS_PAYROLLTRANSINFOTABLE','TRANSCODE'),
  ('INS_PAYROLLTRANSINFOTABLE','TRANSDESC'),
  ('PROJHOURCOSTPRICE',        'COSTPRICE'),
- ('PROJHOURCOSTPRICE',        'FROMDATE'),
- ('PROJHOURCOSTPRICE',        'RESOURCE'),
+ ('PROJHOURCOSTPRICE',        'TRANSDATE'),
+ ('PROJHOURCOSTPRICE',        'RESOURCE_'),
  ('PROJHOURCOSTPRICE',        'DATAAREAID');
 
 DECLARE @missing NVARCHAR(MAX) =
@@ -119,8 +119,8 @@ SELECT
     d.Hours                                    AS Hours
 INTO #WeekDays
 FROM TSTIMESHEETTABLE     AS ts     WITH (NOLOCK)
-JOIN RESOURCE_            AS rv     WITH (NOLOCK)
-    ON  rv.RECID            = ts.RESOURCE
+JOIN RESOURCEVIEW         AS rv     WITH (NOLOCK)
+    ON  rv.RECID            = ts.RESOURCE_
     AND rv.RESOURCECOMPANYID = @DataAreaId
 JOIN TSTIMESHEETLINE      AS tsLine WITH (NOLOCK)
     ON  tsLine.TIMESHEETNBR = ts.TIMESHEETNBR
@@ -128,13 +128,13 @@ JOIN TSTIMESHEETLINE      AS tsLine WITH (NOLOCK)
 JOIN TSTIMESHEETLINEWEEK  AS tsWeek WITH (NOLOCK)
     ON  tsWeek.TSTIMESHEETLINE = tsLine.RECID
 CROSS APPLY (VALUES
-    (0, tsWeek.HOURS1),
-    (1, tsWeek.HOURS2),
-    (2, tsWeek.HOURS3),
-    (3, tsWeek.HOURS4),
-    (4, tsWeek.HOURS5),
-    (5, tsWeek.HOURS6),
-    (6, tsWeek.HOURS7)
+    (0, tsWeek.HOURS),
+    (1, tsWeek.HOURS2_),
+    (2, tsWeek.HOURS3_),
+    (3, tsWeek.HOURS4_),
+    (4, tsWeek.HOURS5_),
+    (5, tsWeek.HOURS6_),
+    (6, tsWeek.HOURS7_)
 ) AS d (DayOffset, Hours)
 WHERE ts.APPROVALSTATUS = @ApprovalStatus
   AND ts.DATAAREAID     = @DataAreaId
@@ -212,12 +212,12 @@ SELECT
         (SELECT TOP (1) phc.COSTPRICE
          FROM PROJHOURCOSTPRICE AS phc WITH (NOLOCK)
          WHERE phc.DATAAREAID = @DataAreaId
-           AND phc.RESOURCE   = rv.RECID
-           AND phc.FROMDATE  <= @ToDate
-         ORDER BY phc.FROMDATE DESC),
+           AND phc.RESOURCE_  = rv.RECID
+           AND phc.TRANSDATE <= @ToDate
+         ORDER BY phc.TRANSDATE DESC),
     3) AS HourRate
 INTO #HourRate
-FROM RESOURCE_ AS rv WITH (NOLOCK)
+FROM RESOURCEVIEW AS rv WITH (NOLOCK)
 WHERE rv.RESOURCECOMPANYID = @DataAreaId
   AND EXISTS (SELECT 1 FROM #WorkerTotalHours wth WHERE wth.WorkerId = rv.RESOURCEID);
 
