@@ -206,4 +206,125 @@ WHERE rv.ResourceId = '2335'
 GROUP BY tst.ApprovalStatus
 ORDER BY tst.ApprovalStatus;
 
+
+/* ---------------------------------------------------------------------
+   SECTION 11 — ProjHourCostPrice CATEGORYID DISTRIBUTION
+   ---------------------------------------------------------------------
+   CATEGORYID is nvarchar. ResourceFacade::getCostPrice(rv.RecId, toDate, 0)
+   filters the cost-price lookup on a category. This shows which CATEGORYID
+   literal (and whether ISRESOURCERATE) the main script's hour-rate lookup
+   should use. The hour rate drives StandardAmount.
+   --------------------------------------------------------------------- */
+SELECT
+    phc.CATEGORYID,
+    phc.ISRESOURCERATE,
+    COUNT(*)                      AS RowCnt,
+    COUNT(DISTINCT phc.RESOURCE_) AS ResourceCnt,
+    MIN(phc.COSTPRICE)            AS MinCostPrice,
+    MAX(phc.COSTPRICE)            AS MaxCostPrice
+FROM ProjHourCostPrice phc
+WHERE phc.DATAAREAID = 'ENGJ'
+GROUP BY phc.CATEGORYID, phc.ISRESOURCERATE
+ORDER BY RowCnt DESC;
+
+
+/* ---------------------------------------------------------------------
+   SECTION 12 — LATEST COST PRICE PER (RESOURCE, CATEGORY) FOR RESOURCES
+                ACTIVE IN FEBRUARY 2026
+   ---------------------------------------------------------------------
+   For every resource with approved Feb-2026 timesheet hours, the most
+   recent cost-price row as of 2026-02-28 for each CATEGORYID. Reveals
+   which category carries the real hourly rate per worker.
+   --------------------------------------------------------------------- */
+SELECT
+    rv.ResourceId,
+    x.CATEGORYID,
+    x.ISRESOURCERATE,
+    x.ELR,
+    x.TRANSDATE,
+    x.COSTPRICE
+FROM (
+    SELECT
+        phc.RESOURCE_, phc.CATEGORYID, phc.ISRESOURCERATE, phc.ELR,
+        phc.TRANSDATE, phc.COSTPRICE,
+        ROW_NUMBER() OVER (PARTITION BY phc.RESOURCE_, phc.CATEGORYID
+                           ORDER BY phc.TRANSDATE DESC) AS rn
+    FROM ProjHourCostPrice phc
+    WHERE phc.DATAAREAID = 'ENGJ'
+      AND phc.TRANSDATE <= '2026-02-28'
+) x
+JOIN ResourceView rv ON rv.RecId = x.RESOURCE_
+WHERE x.rn = 1
+  AND x.RESOURCE_ IN (
+        SELECT DISTINCT tst.Resource_
+        FROM TSTimesheetTable    tst
+        JOIN TSTimesheetLine     tsl  ON tsl.TimesheetNbr     = tst.TimesheetNbr
+        JOIN TSTimesheetLineWeek tslw ON tslw.TSTimesheetLine = tsl.RecId
+        WHERE tst.ApprovalStatus = 6
+          AND tst.DataAreaId     = 'ENGJ'
+          AND tslw.DayFrom <= '2026-02-28'
+          AND DATEADD(day, 6, tslw.DayFrom) >= '2026-02-01'
+  )
+ORDER BY rv.ResourceId, x.CATEGORYID;
+
+
+/* ---------------------------------------------------------------------
+   SECTION 13 — ACTUALAMOUNT VALIDATION (rate-independent)
+   ---------------------------------------------------------------------
+   Computes the grand total and by-TransCode breakdown of ActualAmount
+   using the corrected Stage 1/2 logic (ResourceView joined on RecId
+   only, no company filter). ActualAmount does not depend on the hour
+   rate, so this confirms the main fix immediately.
+   Expected grand total target: 634,112.27 JOD.
+   --------------------------------------------------------------------- */
+WITH
+WeekClippedHours AS (
+    SELECT
+        rv.RESOURCEID AS WorkerId,
+        tsl.PROJID    AS ProjId,
+          ISNULL(CASE WHEN DATEADD(day,0,tslw.DAYFROM) BETWEEN '2026-02-01' AND '2026-02-28' THEN tslw.HOURS   END, 0)
+        + ISNULL(CASE WHEN DATEADD(day,1,tslw.DAYFROM) BETWEEN '2026-02-01' AND '2026-02-28' THEN tslw.HOURS2_ END, 0)
+        + ISNULL(CASE WHEN DATEADD(day,2,tslw.DAYFROM) BETWEEN '2026-02-01' AND '2026-02-28' THEN tslw.HOURS3_ END, 0)
+        + ISNULL(CASE WHEN DATEADD(day,3,tslw.DAYFROM) BETWEEN '2026-02-01' AND '2026-02-28' THEN tslw.HOURS4_ END, 0)
+        + ISNULL(CASE WHEN DATEADD(day,4,tslw.DAYFROM) BETWEEN '2026-02-01' AND '2026-02-28' THEN tslw.HOURS5_ END, 0)
+        + ISNULL(CASE WHEN DATEADD(day,5,tslw.DAYFROM) BETWEEN '2026-02-01' AND '2026-02-28' THEN tslw.HOURS6_ END, 0)
+        + ISNULL(CASE WHEN DATEADD(day,6,tslw.DAYFROM) BETWEEN '2026-02-01' AND '2026-02-28' THEN tslw.HOURS7_ END, 0)
+            AS ClippedHours
+    FROM TSTimesheetTable     tst
+    JOIN ResourceView         rv   ON rv.RecId = tst.Resource_
+    JOIN TSTimesheetLine      tsl  ON tsl.TimesheetNbr   = tst.TimesheetNbr
+                                  AND tsl.DataAreaId     = tst.DataAreaId
+    JOIN TSTimesheetLineWeek  tslw ON tslw.TSTimesheetLine = tsl.RecId
+    WHERE tst.ApprovalStatus = 6
+      AND tst.DataAreaId     = 'ENGJ'
+      AND tslw.DayFrom <= '2026-02-28'
+      AND DATEADD(day, 6, tslw.DayFrom) >= '2026-02-01'
+),
+WorkerProjectHours AS (
+    SELECT WorkerId, ProjId, SUM(ClippedHours) AS ProjHours
+    FROM WeekClippedHours GROUP BY WorkerId, ProjId
+),
+WorkerTotalHours AS (
+    SELECT WorkerId, SUM(ProjHours) AS WorkerTotalHours
+    FROM WorkerProjectHours GROUP BY WorkerId HAVING SUM(ProjHours) <> 0
+),
+PayrollByTransCode AS (
+    SELECT p.PERSONNELNUMBER AS WorkerId, p.TRANSCODE AS TransCode,
+           SUM(p.COSTAMOUNT) AS CostAmount
+    FROM INS_PayrollEmplTrans p
+    WHERE p.COMPANYCODE = 'C01' AND p.[YEAR] = 2026 AND p.[MONTH] = 2
+      AND p.PROJECTCOST <> 0
+      AND p.TRANSCODE IS NOT NULL AND LTRIM(RTRIM(p.TRANSCODE)) <> ''
+    GROUP BY p.PERSONNELNUMBER, p.TRANSCODE
+)
+SELECT
+    ISNULL(ptc.TransCode, '== TOTAL ==') AS TransCode,
+    COUNT(*) AS RowCnt,
+    SUM(ABS((CAST(ptc.CostAmount AS FLOAT) / wth.WorkerTotalHours) * wph.ProjHours)) AS SumActualAmount
+FROM WorkerProjectHours  wph
+JOIN WorkerTotalHours    wth ON wth.WorkerId = wph.WorkerId
+JOIN PayrollByTransCode  ptc ON ptc.WorkerId = wph.WorkerId
+GROUP BY ROLLUP(ptc.TransCode)
+ORDER BY GROUPING(ptc.TransCode), ptc.TransCode;
+
 /* ===================================================================== */
